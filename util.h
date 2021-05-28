@@ -48,15 +48,6 @@ void normalize_timespec(struct timespec *ts);
 /* Find the absolute system time that is `timeout_ms` milliseconds in the future, and store that in *ts */
 void get_deadline(uint32_t timeout_ms, struct timespec *ts);
 
-/* record current CPU time in start_time */
-void start_cpu_timing(struct timespec *start_time);
-
-/* add difference between start_time and the current CPU time to add_to */
-void end_cpu_timing(const struct timespec *start_time, struct timespec *add_to);
-
-/* like end_cpu_timing followed by start_cpu_timing, but without a gap */
-void update_cpu_timing(struct timespec *start_time, struct timespec *add_to);
-
 /* set current thread name, if supported */
 void set_thread_name(const char *name);
 

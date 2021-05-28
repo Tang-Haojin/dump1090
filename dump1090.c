@@ -48,6 +48,7 @@
 //   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "dump1090.h"
+#include "sdr_hackrf.h"
 #include "cpu.h"
 
 #include <stdarg.h>
@@ -58,49 +59,25 @@ struct _Modes Modes;
 // ============================= Utility functions ==========================
 //
 
-static void log_with_timestamp(const char *format, ...) __attribute__((format (printf, 1, 2) ));
-
-static void log_with_timestamp(const char *format, ...)
-{
-    char timebuf[128];
-    char msg[1024];
-    time_t now;
-    struct tm local;
-    va_list ap;
-
-    now = time(NULL);
-    localtime_r(&now, &local);
-    strftime(timebuf, 128, "%c %Z", &local);
-    timebuf[127] = 0;
-
-    va_start(ap, format);
-    vsnprintf(msg, 1024, format, ap);
-    va_end(ap);
-    msg[1023] = 0;
-
-    fprintf(stderr, "%s  %s\n", timebuf, msg);
-}
-
 static void sigintHandler(int dummy) {
     MODES_NOTUSED(dummy);
     signal(SIGINT, SIG_DFL);  // reset signal handler - bit extra safety
     Modes.exit = 1;           // Signal to threads that we are done
-    log_with_timestamp("Caught SIGINT, shutting down..\n");
 }
 
 static void sigtermHandler(int dummy) {
     MODES_NOTUSED(dummy);
     signal(SIGTERM, SIG_DFL); // reset signal handler - bit extra safety
     Modes.exit = 1;           // Signal to threads that we are done
-    log_with_timestamp("Caught SIGTERM, shutting down..\n");
 }
 
 void receiverPositionChanged(float lat, float lon, float alt)
 {
-    log_with_timestamp("Autodetected receiver location: %.5f, %.5f at %.0fm AMSL", lat, lon, alt);
-    writeJsonToFile("receiver.json", generateReceiverJson); // location changed
+    /* nothing */
+    (void) lat;
+    (void) lon;
+    (void) alt;
 }
-
 
 //
 // =============================== Initialization ===========================
@@ -115,14 +92,13 @@ static void modesInitConfig(void) {
     Modes.check_crc               = 1;
     Modes.fix_df                  = 1;
     Modes.net_heartbeat_interval  = MODES_NET_HEARTBEAT_INTERVAL;
-    Modes.interactive_display_ttl = MODES_INTERACTIVE_DISPLAY_TTL;
     Modes.json_interval           = 1000;
     Modes.json_stats_interval     = 60000;
     Modes.json_location_accuracy  = 1;
-    Modes.maxRange                = 1852 * 300; // 300NM default max range
     Modes.mode_ac_auto            = 1;
 
-    sdrInitConfig();
+    Modes.sdr_type = SDR_HACKRF;
+    hackRFInitConfig();
 }
 //
 //=========================================================================
@@ -144,25 +120,6 @@ static void modesInit(void) {
     if (!fifo_create(MODES_MAG_BUFFERS, MODES_MAG_BUF_SAMPLES + Modes.trailing_samples, Modes.trailing_samples)) {
         fprintf(stderr, "Out of memory allocating FIFO\n");
         exit(1);
-    }
-
-    // Validate the users Lat/Lon home location inputs
-    if ( (Modes.fUserLat >   90.0)  // Latitude must be -90 to +90
-      || (Modes.fUserLat <  -90.0)  // and
-      || (Modes.fUserLon >  360.0)  // Longitude must be -180 to +360
-      || (Modes.fUserLon < -180.0) ) {
-        Modes.fUserLat = Modes.fUserLon = 0.0;
-    } else if (Modes.fUserLon > 180.0) { // If Longitude is +180 to +360, make it -180 to 0
-        Modes.fUserLon -= 360.0;
-    }
-    // If both Lat and Lon are 0.0 then the users location is either invalid/not-set, or (s)he's in the
-    // Atlantic ocean off the west coast of Africa. This is unlikely to be correct.
-    // Set the user LatLon valid flag only if either Lat or Lon are non zero. Note the Greenwich meridian
-    // is at 0.0 Lon,so we must check for either fLat or fLon being non zero not both.
-    // Testing the flag at runtime will be much quicker than ((fLon != 0.0) || (fLat != 0.0))
-    Modes.bUserFlags &= ~MODES_USER_LATLON_VALID;
-    if ((Modes.fUserLat != 0.0) || (Modes.fUserLon != 0.0)) {
-        Modes.bUserFlags |= MODES_USER_LATLON_VALID;
     }
 
     // Limit the maximum requested raw output size to less than one Ethernet Block
@@ -211,7 +168,7 @@ static void *readerThreadEntryPoint(void *arg)
 {
     MODES_NOTUSED(arg);
 
-    sdrRun();
+    hackRFRun();
 
     if (!Modes.exit)
         Modes.exit = 2; // unexpected exit
@@ -220,303 +177,66 @@ static void *readerThreadEntryPoint(void *arg)
     return NULL;
 }
 //
-// ============================== Snip mode =================================
-//
-// Get raw IQ samples and filter everything is < than the specified level
-// for more than 256 samples in order to reduce example file size
-//
-static void snipMode(int level) {
-    int i, q;
-    uint64_t c = 0;
-
-    while ((i = getchar()) != EOF && (q = getchar()) != EOF) {
-        if (abs(i-127) < level && abs(q-127) < level) {
-            c++;
-            if (c > MODES_PREAMBLE_SIZE) continue;
-        } else {
-            c = 0;
-        }
-        putchar(i);
-        putchar(q);
-    }
-}
-//
 // ================================ Main ====================================
 //
-static void showVersion()
-{
-    printf("-----------------------------------------------------------------------------\n");
-    printf("| dump1090 ModeS Receiver     %45s |\n", MODES_DUMP1090_VARIANT " " MODES_DUMP1090_VERSION);
-    printf("| build options: %-58s |\n",
-           ""
-#ifdef ENABLE_RTLSDR
-           "ENABLE_RTLSDR "
-#endif
-#ifdef ENABLE_BLADERF
-           "ENABLE_BLADERF "
-#endif
-#ifdef ENABLE_HACKRF
-           "ENABLE_HACKRF "
-#endif
-#ifdef ENABLE_LIMESDR
-           "ENABLE_LIMESDR "
-#endif
-           );
-    printf("-----------------------------------------------------------------------------\n");
-}
 
-static void showDSP()
-{
-    printf("  detected runtime CPU features: ");
-    if (cpu_supports_avx())
-        printf("AVX ");
-    if (cpu_supports_avx2())
-        printf("AVX2 ");
-    if (cpu_supports_armv7_neon_vfpv4())
-        printf("ARMv7+NEON+VFPv4 ");
-    printf("\n");
+// int main() {
+//     // Set sane defaults
+//     modesInitConfig();
 
-    printf("  selected DSP implementations: \n");
-#define SHOW(x) do {                                                    \
-        printf("    %-40s %s\n", #x , starch_ ## x ## _select()->name);  \
-        printf("    %-40s %s\n", #x "_aligned", starch_ ## x ## _aligned_select()->name); \
-    } while(0)
+//     // signal handlers:
+//     signal(SIGINT, sigintHandler);
+//     signal(SIGTERM, sigtermHandler);
 
-    SHOW(magnitude_uc8);
-    SHOW(magnitude_power_uc8);
-    SHOW(magnitude_sc16);
-    SHOW(magnitude_sc16q11);
-    SHOW(mean_power_u16);
+//     if (Modes.nfix_crc > MODES_MAX_BITERRORS)
+//         Modes.nfix_crc = MODES_MAX_BITERRORS;
 
-#undef SHOW
+//     // Initialization
+//     modesInit();
 
-    printf("\n");
-}
+//     if (!hackRFOpen()) {
+//         exit(1);
+//     }
 
-static void showHelp(void)
-{
-    showVersion();
+//     // Create the thread that will read the data from the device.
+//     pthread_create(&Modes.reader_thread, NULL, readerThreadEntryPoint, NULL);
 
-    sdrShowHelp();
+//     while (!Modes.exit) {
+//         // get the next sample buffer off the FIFO; wait only up to 100ms
+//         // this is fairly aggressive as all our network I/O runs out of the background work!
+//         struct mag_buf *buf = fifo_dequeue(100 /* milliseconds */);
 
-    printf(
-"      Common options\n"
-"\n"
-"--gain <db>              Set gain (default: max gain. Use -10 for auto-gain)\n"
-"--freq <hz>              Set frequency (default: 1090 Mhz)\n"
-"--interactive            Interactive mode refreshing data on screen. Implies --throttle\n"
-"--interactive-ttl <sec>  Remove from list if idle for <sec> (default: 60)\n"
-"--interactive-show-distance   Show aircraft distance and bearing instead of lat/lon\n"
-"                              (requires --lat and --lon)\n"
-"--interactive-distance-units  Distance units ('km', 'sm', 'nm') (default: 'nm')\n"
-"--interactive-callsign-filter Only callsigns that match the prefix or regex will be displayed\n"
-"--raw                    Show only messages hex values\n"
-"--net                    Enable networking with default ports unless overridden\n"
-"--modeac                 Enable decoding of SSR Modes 3/A & 3/C\n"
-"--no-modeac-auto         Don't enable Mode A/C if requested by a Beast connection\n"
-"--net-only               Enable just networking, no RTL device or file used\n"
-"--net-bind-address <ip>  IP address to bind to (default: Any; Use 127.0.0.1 for private)\n"
-"--net-ri-port <ports>    TCP raw input listen ports  (default: 30001)\n"
-"--net-ro-port <ports>    TCP raw output listen ports (default: 30002)\n"
-"--net-sbs-port <ports>   TCP BaseStation output listen ports (default: 30003)\n"
-"--net-bi-port <ports>    TCP Beast input listen ports  (default: 30004,30104)\n"
-"--net-bo-port <ports>    TCP Beast output listen ports (default: 30005)\n"
-"--net-stratux-port <ports>   TCP Stratux output listen ports (default: disabled)\n"
-"--net-ro-size <size>     TCP output minimum size (default: 0)\n"
-"--net-ro-interval <rate> TCP output memory flush rate in seconds (default: 0)\n"
-"--net-heartbeat <rate>   TCP heartbeat rate in seconds (default: 60 sec; 0 to disable)\n"
-"--net-buffer <n>         TCP buffer size 64Kb * (2^n) (default: n=0, 64Kb)\n"
-"--net-verbatim           Make Beast-format output connections default to verbatim mode\n"
-"                         (forward all messages, without applying CRC corrections)\n"
-"--forward-mlat           Allow forwarding of received mlat results to output ports\n"
-"--lat <latitude>         Reference/receiver latitude for surface posn (opt)\n"
-"--lon <longitude>        Reference/receiver longitude for surface posn (opt)\n"
-"--max-range <distance>   Absolute maximum range for position decoding (in nm, default: 300)\n"
-"--fix                    Enable single-bit error correction using CRC\n"
-"--fix-2bit               Enable two-bit error correction using CRC (use with caution)\n"
-"--no-fix                 Disable error correction using CRC\n"
-"--no-fix-df              Disable error correction of the DF message field (reduces CPU requirements)\n"
-"--no-crc-check           Disable messages with broken CRC (discouraged)\n"
-"--mlat                   display raw messages in Beast ascii mode\n"
-"--stats                  With --ifile print stats at exit. No other output\n"
-"--stats-range            Collect/show range histogram\n"
-"--stats-every <seconds>  Show and reset stats every <seconds> seconds\n"
-"--onlyaddr               Show only ICAO addresses (testing purposes)\n"
-"--metric                 Use metric units (meters, km/h, ...)\n"
-"--gnss                   Show altitudes as HAE/GNSS (with H suffix) when available\n"
-"--snip <level>           Strip IQ file removing samples < level\n"
-"--quiet                  Disable output to stdout. Use for daemon applications\n"
-"--show-only <addr>       Show only messages from the given ICAO on stdout\n"
-"--write-json <dir>       Periodically write json output to <dir> (for serving by a separate webserver)\n"
-"--write-json-every <t>   Write json aircraft output every t seconds (default 1)\n"
-"--json-stats-every <t>   Write json stats output every t seconds (default 60)\n"
-"--json-location-accuracy <n>  Accuracy of receiver location in json metadata: 0=no location, 1=approximate, 2=exact\n"
-#if 0
-"--dcfilter               Apply a 1Hz DC filter to input data (requires more CPU)\n"
-#endif
-"--wisdom <path>          Read DSP wisdom from given path\n"
-"--version                Show version, build and DSP options\n"
-"--help                   Show this help\n"
-    );
-}
+//         if (buf) {
+//             // Process one buffer
+//             demodulate2400(buf);
+//             if (Modes.mode_ac)
+//                 demodulate2400AC(buf);
 
-// Accumulate stats data from stats_current to stats_periodic, stats_alltime and stats_latest;
-// reset stats_current
-static void flush_stats(uint64_t now)
-{
-    add_stats(&Modes.stats_current, &Modes.stats_periodic, &Modes.stats_periodic);
-    add_stats(&Modes.stats_current, &Modes.stats_alltime, &Modes.stats_alltime);
-    add_stats(&Modes.stats_current, &Modes.stats_latest, &Modes.stats_latest);
+//             // Return the buffer to the FIFO freelist for reuse
+//             fifo_release(buf);
+//         }
+//     }
 
-    reset_stats(&Modes.stats_current);
-    Modes.stats_current.start = Modes.stats_current.end = now;
-}
+//     fifo_halt(); // Reader thread should do this anyway, but just in case..
+//     pthread_join(Modes.reader_thread,NULL);     // Wait on reader thread exit
 
-//
-//=========================================================================
-//
-// This function is called a few times every second by main in order to
-// perform tasks we need to do continuously, like accepting new clients
-// from the net, refreshing the screen in interactive mode, and so forth
-//
-static void backgroundTasks(void) {
-    static uint64_t next_stats_display;
-    static uint64_t next_stats_update;
-    static uint64_t next_json_stats_update;
-    static uint64_t next_json, next_history;
+//     hackRFClose();
+//     fifo_destroy();
 
-    uint64_t now = mstime();
-
-    if (Modes.sdr_type != SDR_IFILE) {
-        // don't run these if processing data from a file
-        icaoFilterExpire();
-        trackPeriodicUpdate();
-    }
-
-    if (Modes.net) {
-        modesNetPeriodicWork();
-    }
-
-
-    // Refresh screen when in interactive mode
-    if (Modes.interactive) {
-        interactiveShowData();
-    }
-
-    // copy out reader CPU time and reset it
-    sdrUpdateCPUTime(&Modes.stats_current.reader_cpu);
-
-    // always update end time so it is current when requests arrive
-    Modes.stats_current.end = mstime();
-
-    // 1-minute stats update
-    if (now >= next_stats_update) {
-        int i;
-
-        if (next_stats_update == 0) {
-            next_stats_update = now + 60000;
-        } else {
-            flush_stats(now); // Ensure stats_latest is up to date
-
-            // move stats_latest into 1-min ring buffer
-            Modes.stats_newest_1min = (Modes.stats_newest_1min + 1) % 15;
-            Modes.stats_1min[Modes.stats_newest_1min] = Modes.stats_latest;
-            reset_stats(&Modes.stats_latest);
-
-            // recalculate 5-min window
-            reset_stats(&Modes.stats_5min);
-            for (i = 0; i < 5; ++i)
-                add_stats(&Modes.stats_1min[(Modes.stats_newest_1min - i + 15) % 15], &Modes.stats_5min, &Modes.stats_5min);
-
-            // recalculate 15-min window
-            reset_stats(&Modes.stats_15min);
-            for (i = 0; i < 15; ++i)
-                add_stats(&Modes.stats_1min[i], &Modes.stats_15min, &Modes.stats_15min);
-
-            next_stats_update += 60000;
-        }
-    }
-
-    // --stats-every display
-    if (Modes.stats && now >= next_stats_display) {
-        if (next_stats_display == 0) {
-            next_stats_display = now + Modes.stats;
-        } else {
-            flush_stats(now); // Ensure stats_periodic is up to date
-
-            display_stats(&Modes.stats_periodic);
-            reset_stats(&Modes.stats_periodic);
-
-            next_stats_display += Modes.stats;
-            if (next_stats_display <= now) {
-                /* something has gone wrong, perhaps the system clock jumped */
-                next_stats_display = now + Modes.stats;
-            }
-        }
-    }
-
-    // json stats update
-    if (Modes.json_dir && now >= next_json_stats_update) {
-        if (next_json_stats_update == 0) {
-            next_json_stats_update = now + Modes.json_stats_interval;
-        } else {
-            flush_stats(now); // Ensure everything we'll write is up to date
-            writeJsonToFile("stats.json", generateStatsJson);
-            next_json_stats_update += Modes.json_stats_interval;
-        }
-    }
-
-    if (Modes.json_dir && now >= next_json) {
-        writeJsonToFile("aircraft.json", generateAircraftJson);
-        next_json = now + Modes.json_interval;
-    }
-
-    if (now >= next_history) {
-        int rewrite_receiver_json = (Modes.json_dir && Modes.json_aircraft_history[HISTORY_SIZE-1].content == NULL);
-
-        free(Modes.json_aircraft_history[Modes.json_aircraft_history_next].content); // might be NULL, that's OK.
-        Modes.json_aircraft_history[Modes.json_aircraft_history_next].content =
-            generateAircraftJson("/data/aircraft.json", &Modes.json_aircraft_history[Modes.json_aircraft_history_next].clen);
-
-        if (Modes.json_dir) {
-            char filebuf[PATH_MAX];
-            snprintf(filebuf, PATH_MAX, "history_%d.json", Modes.json_aircraft_history_next);
-            writeJsonToFile(filebuf, generateHistoryJson);
-        }
-
-        Modes.json_aircraft_history_next = (Modes.json_aircraft_history_next+1) % HISTORY_SIZE;
-
-        if (rewrite_receiver_json)
-            writeJsonToFile("receiver.json", generateReceiverJson); // number of history entries changed
-
-        next_history = now + HISTORY_INTERVAL;
-    }
-}
-
-//
-//=========================================================================
-//
+//     if (Modes.exit == 1)
+//         return 0;
+//     else
+//         return 1;
+// }
 //
 //=========================================================================
 //
 
-static void applyNetDefaults()
-{
-    if (!Modes.net_input_raw_ports)
-        Modes.net_input_raw_ports = strdup("30001");
-    if (!Modes.net_output_raw_ports)
-        Modes.net_output_raw_ports = strdup("30002");
-    if (!Modes.net_output_sbs_ports)
-        Modes.net_output_sbs_ports = strdup("30003");
-    if (!Modes.net_input_beast_ports)
-        Modes.net_input_beast_ports = strdup("30004,30104");
-    if (!Modes.net_output_beast_ports)
-        Modes.net_output_beast_ports = strdup("30005");
-}
+int start_config(void);
+int start_receive(void);
+int stop_receive(void);
 
-int main(int argc, char **argv) {
-    int j;
-
+int start_config() {
     // Set sane defaults
     modesInitConfig();
 
@@ -524,307 +244,50 @@ int main(int argc, char **argv) {
     signal(SIGINT, sigintHandler);
     signal(SIGTERM, sigtermHandler);
 
-    // Parse the command line options
-    for (j = 1; j < argc; j++) {
-        int more = j+1 < argc; // There are more arguments
-
-        if (!strcmp(argv[j],"--freq") && more) {
-            Modes.freq = (int) strtoll(argv[++j],NULL,10);
-        } else if ( (!strcmp(argv[j], "--device") || !strcmp(argv[j], "--device-index")) && more) {
-            Modes.dev_name = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--gain") && more) {
-            Modes.gain = (int) (atof(argv[++j])*10); // Gain is in tens of DBs
-        } else if (!strcmp(argv[j],"--dcfilter")) {
-#if 0
-            Modes.dc_filter = 1;
-#else
-            fprintf(stderr, "--dcfilter option ignored (please raise an issue on github if you have a usecase that needs this)\n");
-#endif
-        } else if (!strcmp(argv[j],"--measure-noise")) {
-            // Ignored
-        } else if (!strcmp(argv[j],"--fix")) {
-            if (Modes.nfix_crc < 1)
-                Modes.nfix_crc = 1;
-        } else if (!strcmp(argv[j],"--fix-2bit")) {
-            Modes.nfix_crc = 2;
-        } else if (!strcmp(argv[j],"--no-fix")) {
-            Modes.nfix_crc = 0;
-        } else if (!strcmp(argv[j],"--no-fix-df")) {
-            Modes.fix_df = 0;
-        } else if (!strcmp(argv[j],"--no-crc-check")) {
-            Modes.check_crc = 0;
-        } else if (!strcmp(argv[j],"--phase-enhance")) {
-            // Ignored, always enabled
-        } else if (!strcmp(argv[j],"--raw")) {
-            Modes.raw = 1;
-        } else if (!strcmp(argv[j],"--net")) {
-            Modes.net = 1;
-            applyNetDefaults();
-        } else if (!strcmp(argv[j],"--modeac")) {
-            Modes.mode_ac = 1;
-            Modes.mode_ac_auto = 0;
-        } else if (!strcmp(argv[j],"--no-modeac-auto")) {
-            Modes.mode_ac_auto = 0;
-        } else if (!strcmp(argv[j],"--net-beast")) {
-            fprintf(stderr, "--net-beast ignored, use --net-bo-port to control where Beast output is generated\n");
-        } else if (!strcmp(argv[j],"--net-only")) {
-            Modes.net = 1;
-            Modes.sdr_type = SDR_NONE;
-            applyNetDefaults();
-       } else if (!strcmp(argv[j],"--net-heartbeat") && more) {
-            Modes.net_heartbeat_interval = (uint64_t)(1000 * atof(argv[++j]));
-       } else if (!strcmp(argv[j],"--net-ro-size") && more) {
-            Modes.net_output_flush_size = atoi(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-ro-rate") && more) {
-            Modes.net_output_flush_interval = 1000 * atoi(argv[++j]) / 15; // backwards compatibility
-        } else if (!strcmp(argv[j],"--net-ro-interval") && more) {
-            Modes.net_output_flush_interval = (uint64_t)(1000 * atof(argv[++j]));
-        } else if (!strcmp(argv[j],"--net-ro-port") && more) {
-            Modes.net = 1;
-            free(Modes.net_output_raw_ports);
-            Modes.net_output_raw_ports = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-ri-port") && more) {
-            Modes.net = 1;
-            free(Modes.net_input_raw_ports);
-            Modes.net_input_raw_ports = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-bo-port") && more) {
-            Modes.net = 1;
-            free(Modes.net_output_beast_ports);
-            Modes.net_output_beast_ports = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-bi-port") && more) {
-            Modes.net = 1;
-            free(Modes.net_input_beast_ports);
-            Modes.net_input_beast_ports = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-bind-address") && more) {
-            free(Modes.net_bind_address);
-            Modes.net_bind_address = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-http-port") && more) {
-            if (strcmp(argv[++j], "0")) {
-                fprintf(stderr, "warning: --net-http-port not supported in this build, option ignored.\n");
-            }
-        } else if (!strcmp(argv[j],"--net-sbs-port") && more) {
-            Modes.net = 1;
-            free(Modes.net_output_sbs_ports);
-            Modes.net_output_sbs_ports = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-stratux-port") && more) {
-            Modes.net = 1;
-            free(Modes.net_output_stratux_ports);
-            Modes.net_output_stratux_ports = strdup(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-buffer") && more) {
-            Modes.net_sndbuf_size = atoi(argv[++j]);
-        } else if (!strcmp(argv[j],"--net-verbatim")) {
-            Modes.net_verbatim = 1;
-        } else if (!strcmp(argv[j],"--forward-mlat")) {
-            Modes.forward_mlat = 1;
-        } else if (!strcmp(argv[j],"--onlyaddr")) {
-            Modes.onlyaddr = 1;
-        } else if (!strcmp(argv[j],"--metric")) {
-            Modes.metric = 1;
-        } else if (!strcmp(argv[j],"--hae") || !strcmp(argv[j],"--gnss")) {
-            Modes.use_gnss = 1;
-        } else if (!strcmp(argv[j],"--aggressive")) {
-            fprintf(stderr, "warning: --aggressive not supported in this build, option ignored (consider '--fix-2bit' instead)\n");
-        } else if (!strcmp(argv[j],"--interactive")) {
-            Modes.interactive = 1;
-        } else if (!strcmp(argv[j],"--interactive-ttl") && more) {
-            Modes.interactive_display_ttl = (uint64_t)(1000 * atof(argv[++j]));
-        } else if (!strcmp(argv[j],"--interactive-show-distance")) {
-            Modes.interactive_show_distance = 1;
-        } else if (!strcmp(argv[j], "--interactive-distance-units") && more) {
-            char *units = argv[++j];
-            if (!strcmp(units, "km")) {
-                Modes.interactive_distance_units = UNIT_KILOMETERS;
-            } else if (!strcmp(units, "sm")) {
-                Modes.interactive_distance_units = UNIT_STATUTE_MILES;
-            } else {
-                Modes.interactive_distance_units = UNIT_NAUTICAL_MILES;
-            }
-        } else if (!strcmp(argv[j], "--interactive-callsign-filter") && more) {
-            Modes.interactive_callsign_filter = strdup(argv[++j]);
-        } else if (!strcmp(argv[j], "--lat") && more) {
-            Modes.fUserLat = atof(argv[++j]);
-        } else if (!strcmp(argv[j],"--lon") && more) {
-            Modes.fUserLon = atof(argv[++j]);
-        } else if (!strcmp(argv[j],"--max-range") && more) {
-            Modes.maxRange = atof(argv[++j]) * 1852.0; // convert to metres
-        } else if (!strcmp(argv[j],"--debug") && more) {
-            fprintf(stderr, "warning: --debug is obsolete and ignored\n");
-            ++j;
-        } else if (!strcmp(argv[j],"--stats")) {
-            if (!Modes.stats)
-                Modes.stats = (uint64_t)1 << 60; // "never"
-        } else if (!strcmp(argv[j],"--stats-range")) {
-            Modes.stats_range_histo = 1;
-        } else if (!strcmp(argv[j],"--stats-every") && more) {
-            Modes.stats = (uint64_t) (1000 * atof(argv[++j]));
-        } else if (!strcmp(argv[j],"--json-stats-every") && more) {
-            Modes.json_stats_interval = (uint64_t) (1000 * atof(argv[++j]));
-        } else if (!strcmp(argv[j],"--snip") && more) {
-            snipMode(atoi(argv[++j]));
-            exit(0);
-        } else if (!strcmp(argv[j],"--help")) {
-            showHelp();
-            exit(0);
-        } else if (!strcmp(argv[j],"--version")) {
-            showVersion();
-            showDSP();
-            exit(0);
-        } else if (!strcmp(argv[j],"--quiet")) {
-            Modes.quiet = 1;
-        } else if (!strcmp(argv[j],"--show-only") && more) {
-            Modes.show_only = (uint32_t) strtoul(argv[++j], NULL, 16);
-        } else if (!strcmp(argv[j],"--mlat")) {
-            Modes.mlat = 1;
-        } else if (!strcmp(argv[j],"--oversample")) {
-            // Ignored
-        } else if (!strcmp(argv[j], "--write-json") && more) {
-            Modes.json_dir = strdup(argv[++j]);
-        } else if (!strcmp(argv[j], "--write-json-every") && more) {
-            Modes.json_interval = (uint64_t)(1000 * atof(argv[++j]));
-            if (Modes.json_interval < 100) // 0.1s
-                Modes.json_interval = 100;
-        } else if (!strcmp(argv[j], "--json-location-accuracy") && more) {
-            Modes.json_location_accuracy = atoi(argv[++j]);
-        } else if (!strcmp(argv[j], "--wisdom") && more) {
-            if (starch_read_wisdom (argv[++j]) < 0) {
-                fprintf(stderr,
-                        "Failed to read wisdom file %s: %s\n", argv[j], strerror(errno));
-                exit(1);
-            }
-        } else if (sdrHandleOption(argc, argv, &j)) {
-            /* handled */
-        } else {
-            fprintf(stderr,
-                    "Unknown or not enough arguments for option '%s'.\nTry %s --help for full option help.\n",
-                    argv[j],
-                    argv[0]);
-            exit(1);
-        }
-    }
-
-    if (Modes.sdr_type == SDR_NONE && !Modes.net) {
-        fprintf(stderr,
-                "No SDR available and network mode not enabled; nothing to do!\n"
-                "Select a SDR type (--device-type or --ifile), or enable network mode (--net)\n"
-                "Try %s --help for full option help.\n",
-                argv[0]);
-        exit(1);
-    }
-
     if (Modes.nfix_crc > MODES_MAX_BITERRORS)
         Modes.nfix_crc = MODES_MAX_BITERRORS;
 
     // Initialization
-    log_with_timestamp("%s %s starting up.", MODES_DUMP1090_VARIANT, MODES_DUMP1090_VERSION);
     modesInit();
 
-    if (!sdrOpen()) {
-        exit(1);
-    }
+    if (!hackRFOpen())
+        return 1;
 
-    if (Modes.net) {
-        modesInitNet();
-    }
+    // Create the thread that will read the data from the device.
+    pthread_create(&Modes.reader_thread, NULL, readerThreadEntryPoint, NULL);
 
-    // init stats:
-    Modes.stats_current.start = Modes.stats_current.end =
-        Modes.stats_alltime.start = Modes.stats_alltime.end =
-        Modes.stats_periodic.start = Modes.stats_periodic.end =
-        Modes.stats_latest.start = Modes.stats_latest.end =
-        Modes.stats_5min.start = Modes.stats_5min.end =
-        Modes.stats_15min.start = Modes.stats_15min.end = mstime();
+    return 0;
+}
 
-    for (j = 0; j < 15; ++j)
-        Modes.stats_1min[j].start = Modes.stats_1min[j].end = Modes.stats_current.start;
+int start_receive() {
+    while (!Modes.exit) {
+        // get the next sample buffer off the FIFO; wait only up to 100ms
+        // this is fairly aggressive as all our network I/O runs out of the background work!
+        struct mag_buf *buf = fifo_dequeue(100 /* milliseconds */);
 
-    // write initial json files so they're not missing
-    writeJsonToFile("receiver.json", generateReceiverJson);
-    writeJsonToFile("stats.json", generateStatsJson);
-    writeJsonToFile("aircraft.json", generateAircraftJson);
+        if (buf) {
+            // Process one buffer
+            demodulate2400(buf);
+            if (Modes.mode_ac)
+                demodulate2400AC(buf);
 
-    interactiveInit();
+            // Return the buffer to the FIFO freelist for reuse
+            fifo_release(buf);
 
-    // If the user specifies --net-only, just run in order to serve network
-    // clients without reading data from the RTL device
-    if (Modes.sdr_type == SDR_NONE) {
-        while (!Modes.exit) {
-            struct timespec start_time;
-            struct timespec slp = { 0, 100 * 1000 * 1000};
-
-            start_cpu_timing(&start_time);
-            backgroundTasks();
-            end_cpu_timing(&start_time, &Modes.stats_current.background_cpu);
-
-            nanosleep(&slp, NULL);
         }
-    } else {
-        int watchdogCounter = 10; // about 1 second
-
-        // Create the thread that will read the data from the device.
-        pthread_create(&Modes.reader_thread, NULL, readerThreadEntryPoint, NULL);
-
-        while (!Modes.exit) {
-            // get the next sample buffer off the FIFO; wait only up to 100ms
-            // this is fairly aggressive as all our network I/O runs out of the background work!
-            struct mag_buf *buf = fifo_dequeue(100 /* milliseconds */);
-            struct timespec start_time;
-
-            if (buf) {
-                // Process one buffer
-
-                start_cpu_timing(&start_time);
-                demodulate2400(buf);
-                if (Modes.mode_ac) {
-                    demodulate2400AC(buf);
-                }
-
-                Modes.stats_current.samples_processed += buf->validLength - buf->overlap;
-                Modes.stats_current.samples_dropped += buf->dropped;
-                end_cpu_timing(&start_time, &Modes.stats_current.demod_cpu);
-
-                // Return the buffer to the FIFO freelist for reuse
-                fifo_release(buf);
-
-                // We got something so reset the watchdog
-                watchdogCounter = 10;
-            } else {
-                // Nothing to process this time around.
-                if (--watchdogCounter <= 0) {
-                    log_with_timestamp("No data received from the SDR for a long time, it may have wedged");
-                    watchdogCounter = 600;
-                }
-            }
-
-            start_cpu_timing(&start_time);
-            backgroundTasks();
-            end_cpu_timing(&start_time, &Modes.stats_current.background_cpu);
-        }
-
-        log_with_timestamp("Waiting for receive thread termination");
-        fifo_halt(); // Reader thread should do this anyway, but just in case..
-        pthread_join(Modes.reader_thread,NULL);     // Wait on reader thread exit
     }
+    return 0;
+}
 
-    interactiveCleanup();
+int stop_receive() {
+    fifo_halt();                             // Reader thread should do this anyway, but just in case..
+    pthread_join(Modes.reader_thread, NULL); // Wait on reader thread exit
 
-    // Write final stats
-    flush_stats(0);
-    writeJsonToFile("stats.json", generateStatsJson);
-    if (Modes.stats) {
-        display_stats(&Modes.stats_alltime);
-    }
-
-    sdrClose();
+    hackRFClose();
     fifo_destroy();
 
-    if (Modes.exit == 1) {
-        log_with_timestamp("Normal exit.");
+    if (Modes.exit == 1)
         return 0;
-    } else {
-        log_with_timestamp("Abnormal exit.");
+    else
         return 1;
-    }
 }
-//
-//=========================================================================
-//

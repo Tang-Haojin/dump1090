@@ -21,8 +21,6 @@
 #define HACKRF_H
 
 void hackRFInitConfig();
-void hackRFShowHelp();
-bool hackRFHandleOption(int argc, char **argv, int *jptr);
 bool hackRFOpen();
 void hackRFRun();
 void hackRFClose();

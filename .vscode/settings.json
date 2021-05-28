@@ -1,0 +1,8 @@
+{
+	"files.associations": {
+		"stdarg.h": "c",
+		"sdr_hackrf.h": "c",
+		"dump1090.h": "c",
+		"mode_s.h": "c"
+	}
+}

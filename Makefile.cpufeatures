@@ -6,15 +6,15 @@ CPUFEATURES_UNAME := $(shell uname)
 CPUFEATURES_ARCH := $(shell uname -m)
 
 CPUFEATURES_OBJS := cpu_features/src/filesystem.o cpu_features/src/stack_line_reader.o cpu_features/src/string_view.o
-CPUFEATURES_CFLAGS := -std=c99 -O -g -DSTACK_LINE_READER_BUFFER_SIZE=1024 -DNDEBUG
+CPUFEATURES_CFLAGS := -std=c99 -O -g -DSTACK_LINE_READER_BUFFER_SIZE=1024 -DNDEBUG  -fPIC
 
 ifeq ($(CPUFEATURES_UNAME),Linux)
   CPUFEATURES_OBJS += cpu_features/src/hwcaps.o
-  CPUFEATURES_CFLAGS += -DHAVE_STRONG_GETAUXVAL
+  CPUFEATURES_CFLAGS += -DHAVE_STRONG_GETAUXVAL  -fPIC
 endif
 
 ifeq ($(CPUFEATURES_UNAME),Darwin)
-  CPUFEATURES_CFLAGS += -DHAVE_SYSCTLBYNAME
+  CPUFEATURES_CFLAGS += -DHAVE_SYSCTLBYNAME -fPIC
 endif
 
 ifeq ($(CPUFEATURES_ARCH), x86_64)
@@ -29,5 +29,5 @@ ifneq (,$(findstring aarch64,$(CPUFEATURES_ARCH)))
   CPUFEATURES_OBJS += cpu_features/src/cpuinfo_aarch64.o
 endif
 
-$(CPUFEATURES_OBJS): override CFLAGS := $(CPUFEATURES_CFLAGS)
-$(CPUFEATURES_OBJS): override CPPFLAGS := -Icpu_features/include
+$(CPUFEATURES_OBJS): override CFLAGS := $(CPUFEATURES_CFLAGS)  -fPIC
+$(CPUFEATURES_OBJS): override CPPFLAGS := -Icpu_features/include  -fPIC

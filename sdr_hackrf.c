@@ -49,62 +49,6 @@ void hackRFInitConfig()
     HackRF.converter_state = NULL;
 }
 
-bool hackRFHandleOption(int argc, char **argv, int *jptr)
-{
-    int j = *jptr;
-    bool more = (j+1 < argc);
-    if (!strcmp(argv[j], "--lna-gain") && more) {
-        HackRF.lna_gain = atoi(argv[++j]);
-
-        if (HackRF.lna_gain % 8 != 0) {
-            fprintf(stderr, "Error: --lna-gain must be multiple of 8\n");
-            return false;
-        }
-
-        if (HackRF.lna_gain > 40 || HackRF.lna_gain < 0) {
-            fprintf(stderr, "Error: --lna-gain range is 0 - 42\n");
-            return false;
-        }
-    } else if (!strcmp(argv[j], "--vga-gain") && more) {
-        HackRF.vga_gain = atoi(argv[++j]);
-
-        if (HackRF.vga_gain % 2 != 0) {
-            fprintf(stderr, "Error: --vga-gain must be multiple of 2\n");
-            return false;
-        }
-
-        if (HackRF.vga_gain > 62 || HackRF.vga_gain < 0) {
-            fprintf(stderr, "Error: --vga-gain range is 0 - 62\n");
-            return false;
-        }
-
-    } else if (!strcmp(argv[j], "--ppm") && more) {
-        HackRF.ppm = atoi(argv[++j]);
-    } else if (!strcmp(argv[j], "--samplerate") && more) {
-        HackRF.rate = atoi(argv[++j]);
-    } else if (!strcmp(argv[j], "--enable-amp")) {
-        HackRF.enable_amp = 1;
-    } else {
-        return false;
-    }
-
-    *jptr = j;
-
-    return true;
-}
-
-void hackRFShowHelp()
-{
-    printf("      HackRF-specific options (use with --device-type hackrf)\n");
-    printf("\n");
-    printf("--enable-amp             enable amplifier)\n");
-    printf("--lna-gain               set LNA gain (Range 0-40 in 8dB steps))\n");
-    printf("--vga-gain               set VGA gain (Range 0-62 in 2dB steps))\n");
-    printf("--samplerate             set sample rate)\n");
-    printf("--ppm                    ppm correction)\n");
-    printf("\n");
-}
-
 static void show_config()
 {
     fprintf(stderr, "freq : %" PRIu64 "\n", HackRF.freq);
@@ -116,6 +60,7 @@ static void show_config()
 
 bool hackRFOpen()
 {
+    pthread_mutex_init(&Modes.reader_cpu_mutex, NULL);
     if (HackRF.device) {
         return true;
     }
@@ -200,8 +145,6 @@ static int handle_hackrf_samples(hackrf_transfer *transfer)
     static unsigned dropped = 0;
     static uint64_t sampleCounter = 0;
 
-    sdrMonitor();
-
     if (Modes.exit || transfer->valid_length < 0)
         return -1;
 
@@ -261,6 +204,8 @@ static int handle_hackrf_samples(hackrf_transfer *transfer)
 
 void hackRFRun()
 {
+    set_thread_name("dump1090-sdr");
+
     if (!HackRF.device) {
         fprintf(stderr, "hackRFRun: HackRF.device = NULL\n");
         return;
@@ -283,10 +228,12 @@ void hackRFRun()
     }
 
     fprintf(stderr, "HackRF stopped streaming %d\n", hackrf_is_streaming(HackRF.device));
+
 }
 
 void hackRFClose()
 {
+    pthread_mutex_destroy(&Modes.reader_cpu_mutex);
     if (HackRF.device) {
         hackrf_close(HackRF.device);
         hackrf_exit();

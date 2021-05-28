@@ -1031,7 +1031,6 @@ static void decodeESAirbornePosition(struct modesMessage *mm, int check_imf)
             //   400648 (BAE ATP) - Atlantic Airlines
             // altitude == 0, longitude == 0, type == 15 and zeros in latitude LSB.
             // Can alternate with valid reports having type == 14
-            Modes.stats_current.cpr_filtered++;
         } else {
             // Otherwise, assume it's valid.
             mm->cpr_valid = 1;
@@ -2199,25 +2198,12 @@ void displayModesMessage(struct modesMessage *mm) {
 // processing and visualization
 //
 void useModesMessage(struct modesMessage *mm) {
-    struct aircraft *a;
-
-    ++Modes.stats_current.messages_total;
-    if (mm->msgtype >= 0 && mm->msgtype < 32) {
-        ++Modes.stats_current.messages_by_df[mm->msgtype];
-    }
-
     // Track aircraft state
-    a = trackUpdateFromMessage(mm);
+    trackUpdateFromMessage(mm);
 
     // In non-interactive non-quiet mode, display messages on standard output
-    if (!Modes.interactive && !Modes.quiet && (!Modes.show_only || mm->addr == Modes.show_only)) {
+    if (!Modes.interactive && !Modes.quiet && (!Modes.show_only || mm->addr == Modes.show_only))
         displayModesMessage(mm);
-    }
-
-    // Feed output clients; modesQueueOutput appropriately filters messages to the different outputs.
-    if (Modes.net) {
-        modesQueueOutput(mm, a);
-    }
 }
 
 //

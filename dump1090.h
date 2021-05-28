@@ -262,21 +262,17 @@ typedef enum {
 // Include subheaders after all the #defines are in place
 
 #include "util.h"
-#include "anet.h"
-#include "net_io.h"
 #include "crc.h"
 #include "demod_2400.h"
-#include "stats.h"
 #include "cpr.h"
 #include "icao_filter.h"
 #include "convert.h"
-#include "sdr.h"
 #include "fifo.h"
 
 //======================== structure declarations =========================
 
 typedef enum {
-    SDR_NONE, SDR_IFILE, SDR_RTLSDR, SDR_BLADERF, SDR_HACKRF, SDR_LIMESDR
+    SDR_RTLSDR, SDR_HACKRF
 } sdr_type_t;
 
 // Program global state
@@ -284,8 +280,6 @@ struct _Modes {                             // Internal state
     pthread_t       reader_thread;
 
     pthread_mutex_t reader_cpu_mutex;                     // mutex protecting reader_cpu_accumulator
-    struct timespec reader_cpu_accumulator;               // accumulated CPU time used by the reader thread
-    struct timespec reader_cpu_start;                     // start time for the last reader thread CPU measurement
 
     unsigned        trailing_samples;                     // extra trailing samples in magnitude buffers
     double          sample_rate;                          // actual sample rate in use (in hz)
@@ -302,19 +296,11 @@ struct _Modes {                             // Internal state
     int           freq;
 
     // Networking
-    char           aneterr[ANET_ERR_LEN];
     struct net_service *services;    // Active services
     struct client *clients;          // Our clients
 
     struct net_service *beast_verbatim_service;  // Beast-format output service, verbatim mode
     struct net_service *beast_cooked_service;    // Beast-format output service, "cooked" mode
-
-    struct net_writer raw_out;                   // AVR-format output
-    struct net_writer beast_verbatim_out;        // Beast-format output, verbatim mode
-    struct net_writer beast_cooked_out;          // Beast-format output, "cooked" mode
-    struct net_writer sbs_out;                   // SBS-format output
-    struct net_writer stratux_out;               // Stratux-format output
-    struct net_writer fatsv_out;                 // FATSV-format output
 
 #ifdef _WIN32
     WSADATA        wsaData;          // Windows socket initialisation
@@ -368,25 +354,9 @@ struct _Modes {                             // Internal state
         char *content;
         int clen;
     } json_aircraft_history[HISTORY_SIZE];
-
-    // User details
-    double fUserLat;                // Users receiver/antenna lat/lon needed for initial surface location
-    double fUserLon;                // Users receiver/antenna lat/lon needed for initial surface location
-    int    bUserFlags;              // Flags relating to the user details
-    double maxRange;                // Absolute maximum decoding range, in *metres*
-
+    
     // State tracking
     struct aircraft *aircrafts;
-
-    // Statistics
-    struct stats stats_current;     // Currently accumulating stats, this is where all stats are initially collected
-    struct stats stats_alltime;     // Accumulated stats since the start of the process
-    struct stats stats_periodic;    // Accumulated stats since the last periodic stats display (--stats-every)
-    struct stats stats_latest;      // Accumulated stats since the end of the last 1-minute period
-    struct stats stats_1min[15];    // Accumulated stats for a full 1-minute window; this is a ring buffer maintaining a history of 15 minutes
-    int stats_newest_1min;          // Index into stats_1min of the most recent 1-minute window
-    struct stats stats_5min;        // Accumulated stats from the last 5 complete 1-minute windows
-    struct stats stats_15min;       // Accumulated stats from the last 15 complete 1-minute windows
 };
 
 extern struct _Modes Modes;
@@ -610,16 +580,9 @@ void modeACInit();
 int modeAToModeC (unsigned int modeA);
 unsigned modeCToModeA (int modeC);
 
-//
-// Functions exported from interactive.c
-//
-void  interactiveInit(void);
-void  interactiveShowData(void);
-void  interactiveCleanup(void);
-void  interactiveNoConnection(void);
-
 // Provided by dump1090.c / view1090.c / faup1090.c
 void receiverPositionChanged(float lat, float lon, float alt);
+
 
 #ifdef __cplusplus
 }

@@ -50,8 +50,6 @@
 #include "dump1090.h"
 #include <inttypes.h>
 
-/* #define DEBUG_CPR_CHECKS */
-
 uint32_t modeAC_count[4096];
 uint32_t modeAC_lastcount[4096];
 uint32_t modeAC_match[4096];
@@ -132,7 +130,6 @@ static struct aircraft *trackCreateAircraft(struct modesMessage *mm) {
     F(sda,             60, 70);  // ADS-B only
 #undef F
 
-    Modes.stats_current.unique_aircraft++;
 
     return (a);
 }
@@ -249,21 +246,6 @@ double get_bearing(double lat0, double lon0, double lat1, double lon1)
     return (degree >= 0)? degree : (degree + 360);
 }
 
-static void update_range_histogram(double lat, double lon)
-{
-    if (Modes.stats_range_histo && (Modes.bUserFlags & MODES_USER_LATLON_VALID)) {
-        double range = greatcircle(Modes.fUserLat, Modes.fUserLon, lat, lon);
-        int bucket = round(range / Modes.maxRange * RANGE_BUCKET_COUNT);
-
-        if (bucket < 0)
-            bucket = 0;
-        else if (bucket >= RANGE_BUCKET_COUNT)
-            bucket = RANGE_BUCKET_COUNT-1;
-
-        ++Modes.stats_current.range_histogram[bucket];
-    }
-}
-
 // return true if it's OK for the aircraft to have travelled from its last known position
 // to a new position at (lat,lon,surface) at a time of now.
 static int speed_check(struct aircraft *a, double lat, double lon, int surface)
@@ -311,13 +293,6 @@ static int speed_check(struct aircraft *a, double lat, double lon, int surface)
     distance = greatcircle(a->lat, a->lon, lat, lon);
 
     inrange = (distance <= range);
-#ifdef DEBUG_CPR_CHECKS
-    if (!inrange) {
-        fprintf(stderr, "Speed check failed: %06x: %.3f,%.3f -> %.3f,%.3f in %.1f seconds, max speed %d kt, range %.1fkm, actual %.1fkm\n",
-                a->addr, a->lat, a->lon, lat, lon, elapsed/1000.0, speed, range/1000.0, distance/1000.0);
-    }
-#endif
-
     return inrange;
 }
 
@@ -352,9 +327,6 @@ static int doGlobalCPR(struct aircraft *a, struct modesMessage *mm, double *lat,
         if (trackDataValid(&a->position_valid)) { // Ok to try aircraft relative first
             reflat = a->lat;
             reflon = a->lon;
-        } else if (Modes.bUserFlags & MODES_USER_LATLON_VALID) {
-            reflat = Modes.fUserLat;
-            reflon = Modes.fUserLon;
         } else {
             // No local reference, give up
             return (-1);
@@ -374,28 +346,7 @@ static int doGlobalCPR(struct aircraft *a, struct modesMessage *mm, double *lat,
     }
 
     if (result < 0) {
-#ifdef DEBUG_CPR_CHECKS
-        fprintf(stderr, "CPR: decode failure for %06X (%d).\n", a->addr, result);
-        fprintf(stderr, "  even: %d %d   odd: %d %d  fflag: %s\n",
-                a->cpr_even_lat, a->cpr_even_lon,
-                a->cpr_odd_lat, a->cpr_odd_lon,
-                fflag ? "odd" : "even");
-#endif
         return result;
-    }
-
-    // check max range
-    if (Modes.maxRange > 0 && (Modes.bUserFlags & MODES_USER_LATLON_VALID)) {
-        double range = greatcircle(Modes.fUserLat, Modes.fUserLon, *lat, *lon);
-        if (range > Modes.maxRange) {
-#ifdef DEBUG_CPR_CHECKS
-            fprintf(stderr, "Global range check failed: %06x: %.3f,%.3f, max range %.1fkm, actual %.1fkm\n",
-                    a->addr, *lat, *lon, Modes.maxRange/1000.0, range/1000.0);
-#endif
-
-            Modes.stats_current.cpr_global_range_checks++;
-            return (-2); // we consider an out-of-range value to be bad data
-        }
     }
 
     // for mlat results, skip the speed check
@@ -404,7 +355,6 @@ static int doGlobalCPR(struct aircraft *a, struct modesMessage *mm, double *lat,
 
     // check speed limit
     if (trackDataValid(&a->position_valid) && a->pos_nic >= *nic && !rcIsWorse(a->pos_rc, *rc) && !speed_check(a, *lat, *lon, surface)) {
-        Modes.stats_current.cpr_global_speed_checks++;
         return -2;
     }
 
@@ -439,28 +389,6 @@ static int doLocalCPR(struct aircraft *a, struct modesMessage *mm, double *lat, 
             *rc = a->pos_rc;
 
         range_limit = 50e3;
-    } else if (!surface && (Modes.bUserFlags & MODES_USER_LATLON_VALID)) {
-        reflat = Modes.fUserLat;
-        reflon = Modes.fUserLon;
-
-        // The cell size is at least 360NM, giving a nominal
-        // max range of 180NM (half a cell).
-        //
-        // If the receiver range is more than half a cell
-        // then we must limit this range further to avoid
-        // ambiguity. (e.g. if we receive a position report
-        // at 200NM distance, this may resolve to a position
-        // at (200-360) = 160NM in the wrong direction)
-
-        if (Modes.maxRange == 0) {
-            return (-1); // Can't do receiver-centered checks at all
-        } else if (Modes.maxRange <= 1852*180) {
-            range_limit = Modes.maxRange;
-        } else if (Modes.maxRange < 1852*360) {
-            range_limit = (1852*360) - Modes.maxRange;
-        } else {
-            return (-1); // Can't do receiver-centered checks at all
-        }
     } else {
         // No local reference, give up
         return (-1);
@@ -479,17 +407,12 @@ static int doLocalCPR(struct aircraft *a, struct modesMessage *mm, double *lat, 
     if (range_limit > 0) {
         double range = greatcircle(reflat, reflon, *lat, *lon);
         if (range > range_limit) {
-            Modes.stats_current.cpr_local_range_checks++;
             return (-1);
         }
     }
 
     // check speed limit
     if (trackDataValid(&a->position_valid) && a->pos_nic >= *nic && !rcIsWorse(a->pos_rc, *rc) && !speed_check(a, *lat, *lon, surface)) {
-#ifdef DEBUG_CPR_CHECKS
-        fprintf(stderr, "Speed check for %06X with local decoding failed\n", a->addr);
-#endif
-        Modes.stats_current.cpr_local_speed_checks++;
         return -1;
     }
 
@@ -516,7 +439,6 @@ static void updatePosition(struct aircraft *a, struct modesMessage *mm)
     surface = (mm->cpr_type == CPR_SURFACE);
 
     if (surface) {
-        ++Modes.stats_current.cpr_surface;
 
         // Surface: 25 seconds if >25kt or speed unknown, 50 seconds otherwise
         if (mm->gs_valid && mm->gs.selected <= 25)
@@ -524,7 +446,6 @@ static void updatePosition(struct aircraft *a, struct modesMessage *mm)
         else
             max_elapsed = 25000;
     } else {
-        ++Modes.stats_current.cpr_airborne;
 
         // Airborne: 10 seconds
         max_elapsed = 10000;
@@ -539,31 +460,19 @@ static void updatePosition(struct aircraft *a, struct modesMessage *mm)
         location_result = doGlobalCPR(a, mm, &new_lat, &new_lon, &new_nic, &new_rc);
 
         if (location_result == -2) {
-#ifdef DEBUG_CPR_CHECKS
-            fprintf(stderr, "global CPR failure (invalid) for (%06X).\n", a->addr);
-#endif
             // Global CPR failed because the position produced implausible results.
             // This is bad data. Discard both odd and even messages and wait for a fresh pair.
             // Also disable aircraft-relative positions until we have a new good position (but don't discard the
             // recorded position itself)
-            Modes.stats_current.cpr_global_bad++;
             a->cpr_odd_valid.source = a->cpr_even_valid.source = a->position_valid.source = SOURCE_INVALID;
 
             return;
         } else if (location_result == -1) {
-#ifdef DEBUG_CPR_CHECKS
-            if (mm->source == SOURCE_MLAT) {
-                fprintf(stderr, "CPR skipped from MLAT (%06X).\n", a->addr);
-            }
-#endif
             // No local reference for surface position available, or the two messages crossed a zone.
             // Nonfatal, try again later.
-            Modes.stats_current.cpr_global_skipped++;
         } else {
             if (accept_data(&a->position_valid, mm->source)) {
-                Modes.stats_current.cpr_global_ok++;
             } else {
-                Modes.stats_current.cpr_global_skipped++;
                 location_result = -2;
             }
         }
@@ -574,10 +483,8 @@ static void updatePosition(struct aircraft *a, struct modesMessage *mm)
         location_result = doLocalCPR(a, mm, &new_lat, &new_lon, &new_nic, &new_rc);
 
         if (location_result == 0 && accept_data(&a->position_valid, mm->source)) {
-            Modes.stats_current.cpr_local_ok++;
             mm->cpr_relative = 1;
         } else {
-            Modes.stats_current.cpr_local_skipped++;
             location_result = -1;
         }
     }
@@ -596,7 +503,6 @@ static void updatePosition(struct aircraft *a, struct modesMessage *mm)
         a->pos_nic = new_nic;
         a->pos_rc = new_rc;
 
-        update_range_histogram(new_lat, new_lon);
     }
 }
 
@@ -1045,31 +951,6 @@ struct aircraft *trackUpdateFromMessage(struct modesMessage *mm)
             a->modeA_hit = 0;
         }
         a->squawk = mm->squawk;
-
-#if 0   // Disabled for now as it obscures the origin of the data
-        // Handle 7x00 without a corresponding emergency status
-        if (!mm->emergency_valid) {
-            emergency_t squawk_emergency;
-            switch (mm->squawk) {
-            case 0x7500:
-                squawk_emergency = EMERGENCY_UNLAWFUL;
-                break;
-            case 0x7600:
-                squawk_emergency = EMERGENCY_NORDO;
-                break;
-            case 0x7700:
-                squawk_emergency = EMERGENCY_GENERAL;
-                break;
-            default:
-                squawk_emergency = EMERGENCY_NONE;
-                break;
-            }
-
-            if (squawk_emergency != EMERGENCY_NONE && accept_data(&a->emergency_valid, mm->source)) {
-                a->emergency = squawk_emergency;
-            }
-        }
-#endif
     }
 
     if (mm->emergency_valid && accept_data(&a->emergency_valid, mm->source)) {
@@ -1348,13 +1229,6 @@ static void trackRemoveStaleAircraft(uint64_t now)
 
     while(a) {
         if ((now - a->seen) > TRACK_AIRCRAFT_TTL || (!a->reliable && (now - a->seen) > TRACK_AIRCRAFT_UNRELIABLE_TTL)) {
-            // Count aircraft where we saw only one message before reaping them.
-            // These are likely to be due to messages with bad addresses.
-            if (a->messages == 1)
-                Modes.stats_current.single_message_aircraft++;
-            if (!a->reliable)
-                Modes.stats_current.unreliable_aircraft++;
-
             // Remove the element from the linked list, with care
             // if we are removing the first element
             if (!prev) {
