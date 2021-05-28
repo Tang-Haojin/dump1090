@@ -446,6 +446,7 @@ score_rank scoreModesMessage(const unsigned char *uncorrected)
     }
 }
 
+#ifndef DYNAMIC_LINK
 static const char *score_to_string(score_rank score)
 {
     switch (score) {
@@ -486,6 +487,7 @@ static const char *score_to_string(score_rank score)
 
     return "<bad value>";
 }
+#endif
 
 static void decodeExtendedSquitter(struct modesMessage *mm);
 
@@ -1520,6 +1522,7 @@ static void decodeExtendedSquitter(struct modesMessage *mm)
     }
 }
 
+#ifndef DYNAMIC_LINK
 static const char *df_names[33] = {
     /* 0 */ "Short Air-Air Surveillance",
     /* 1 */ NULL,
@@ -1829,17 +1832,8 @@ static const char *esTypeName(unsigned metype, unsigned mesub)
 void displayModesMessage(struct modesMessage *mm) {
     int j;
 
-    // Handle only addresses mode first.
-    if (Modes.onlyaddr) {
-        printf("%06x\n", mm->addr);
-        return;         // Enough for --onlyaddr mode
-    }
-
     // Show the raw message.
-    if (Modes.mlat && mm->timestampMsg) {
-        printf("@%012" PRIX64, mm->timestampMsg);
-    } else
-        printf("*");
+    printf("*");
 
     for (j = 0; j < mm->msgbits/8; j++) printf("%02x", mm->msg[j]);
     printf(";\n");
@@ -2186,6 +2180,7 @@ void displayModesMessage(struct modesMessage *mm) {
     printf("\n");
     fflush(stdout);
 }
+#endif
 
 //
 //=========================================================================
@@ -2201,9 +2196,9 @@ void useModesMessage(struct modesMessage *mm) {
     // Track aircraft state
     trackUpdateFromMessage(mm);
 
-    // In non-interactive non-quiet mode, display messages on standard output
-    if (!Modes.interactive && !Modes.quiet && (!Modes.show_only || mm->addr == Modes.show_only))
-        displayModesMessage(mm);
+#ifndef DYNAMIC_LINK
+    displayModesMessage(mm);
+#endif
 }
 
 //

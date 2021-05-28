@@ -91,7 +91,7 @@ else
     CPPFLAGS += -DSTARCH_MIX_GENERIC -fPIC 
   endif
 endif
-all: showconfig dump1090 starch-benchmark
+all: showconfig dump1090 dump1090.so starch-benchmark mode_s_dll.o dump1090_dll.o
 
 STARCH_COMPILE := $(CC) $(CPPFLAGS) $(CFLAGS) -c
 include dsp/generated/makefile.$(STARCH_MIX)
@@ -105,14 +105,23 @@ showconfig:
 %.o: %.c *.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+mode_s_dll.o: mode_s.c mode_s.h
+	$(CC) -DDYNAMIC_LINK=1 $(CPPFLAGS) $(CFLAGS)  -c $< -o $@
+
+dump1090_dll.o: dump1090.c dump1090.h
+	$(CC) -DDYNAMIC_LINK=1 $(CPPFLAGS) $(CFLAGS)  -c $< -o $@
+
 dump1090: dump1090.o mode_ac.o mode_s.o comm_b.o crc.o demod_2400.o cpr.o icao_filter.o track.o util.o convert.o ais_charset.o $(SDR_OBJ) $(COMPAT) $(CPUFEATURES_OBJS) $(STARCH_OBJS)
+	$(CC) -g -o $@ $^ $(LDFLAGS) $(LIBS) $(LIBS_SDR) $(LIBS_CURSES)
+
+dump1090.so: dump1090_dll.o mode_ac.o mode_s_dll.o comm_b.o crc.o demod_2400.o cpr.o icao_filter.o track.o util.o convert.o ais_charset.o $(SDR_OBJ) $(COMPAT) $(CPUFEATURES_OBJS) $(STARCH_OBJS)
 	$(CC) -fPIC -shared -g -o $@ $^ $(LDFLAGS) $(LIBS) $(LIBS_SDR) $(LIBS_CURSES)
 
 starch-benchmark: cpu.o dsp/helpers/tables.o $(CPUFEATURES_OBJS) $(STARCH_OBJS) $(STARCH_BENCHMARK_OBJ)
 	$(CC) -g -o $@ $^ $(LDFLAGS) $(LIBS)
 
 clean:
-	rm -f *.o compat/clock_gettime/*.o compat/clock_nanosleep/*.o cpu_features/src/*.o dsp/generated/*.o dsp/helpers/*.o $(CPUFEATURES_OBJS) dump1090 cprtests crctests starch-benchmark
+	rm -f *.o compat/clock_gettime/*.o compat/clock_nanosleep/*.o cpu_features/src/*.o dsp/generated/*.o dsp/helpers/*.o $(CPUFEATURES_OBJS) dump1090 dump1090.so dump1090_dll.o cprtests crctests starch-benchmark
 
 test: cprtests
 	./cprtests

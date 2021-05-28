@@ -1219,7 +1219,7 @@ static void trackMatchAC(uint64_t now)
 //
 //=========================================================================
 //
-// If we don't receive new nessages within TRACK_AIRCRAFT_TTL
+// If we don't receive new messages within TRACK_AIRCRAFT_TTL
 // we remove the aircraft from the list.
 //
 static void trackRemoveStaleAircraft(uint64_t now)

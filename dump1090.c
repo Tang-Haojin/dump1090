@@ -89,13 +89,7 @@ static void modesInitConfig(void) {
     // Now initialise things that should not be 0/NULL to their defaults
     Modes.gain                    = MODES_MAX_GAIN;
     Modes.freq                    = MODES_DEFAULT_FREQ;
-    Modes.check_crc               = 1;
     Modes.fix_df                  = 1;
-    Modes.net_heartbeat_interval  = MODES_NET_HEARTBEAT_INTERVAL;
-    Modes.json_interval           = 1000;
-    Modes.json_stats_interval     = 60000;
-    Modes.json_location_accuracy  = 1;
-    Modes.mode_ac_auto            = 1;
 
     Modes.sdr_type = SDR_HACKRF;
     hackRFInitConfig();
@@ -122,14 +116,6 @@ static void modesInit(void) {
         exit(1);
     }
 
-    // Limit the maximum requested raw output size to less than one Ethernet Block
-    if (Modes.net_output_flush_size > (MODES_OUT_FLUSH_SIZE))
-      {Modes.net_output_flush_size = MODES_OUT_FLUSH_SIZE;}
-    if (Modes.net_output_flush_interval > (MODES_OUT_FLUSH_INTERVAL))
-      {Modes.net_output_flush_interval = MODES_OUT_FLUSH_INTERVAL;}
-    if (Modes.net_sndbuf_size > (MODES_NET_SNDBUF_MAX))
-      {Modes.net_sndbuf_size = MODES_NET_SNDBUF_MAX;}
-
     // Prepare the log10 lookup table: 100log10(x)
     Modes.log10lut[0] = 0; // poorly defined..
     for (i = 1; i <= 65535; i++) {
@@ -140,9 +126,6 @@ static void modesInit(void) {
     modesChecksumInit(Modes.nfix_crc);
     icaoFilterInit();
     modeACInit();
-
-    if (Modes.show_only)
-        icaoFilterAdd(Modes.show_only);
 }
 
 //
@@ -180,61 +163,23 @@ static void *readerThreadEntryPoint(void *arg)
 // ================================ Main ====================================
 //
 
-// int main() {
-//     // Set sane defaults
-//     modesInitConfig();
+int start_config(void) __attribute__((optimize("O0")));
+int start_receive(void) __attribute__((optimize("O0")));
+int stop_receive(void) __attribute__((optimize("O0")));
+int main(void) __attribute__((optimize("O0")));
 
-//     // signal handlers:
-//     signal(SIGINT, sigintHandler);
-//     signal(SIGTERM, sigtermHandler);
+int main() {
+    if(start_config())
+        exit(1);
 
-//     if (Modes.nfix_crc > MODES_MAX_BITERRORS)
-//         Modes.nfix_crc = MODES_MAX_BITERRORS;
+    start_receive();
 
-//     // Initialization
-//     modesInit();
+    return stop_receive();
+}
 
-//     if (!hackRFOpen()) {
-//         exit(1);
-//     }
+// =========================================================================
 
-//     // Create the thread that will read the data from the device.
-//     pthread_create(&Modes.reader_thread, NULL, readerThreadEntryPoint, NULL);
 
-//     while (!Modes.exit) {
-//         // get the next sample buffer off the FIFO; wait only up to 100ms
-//         // this is fairly aggressive as all our network I/O runs out of the background work!
-//         struct mag_buf *buf = fifo_dequeue(100 /* milliseconds */);
-
-//         if (buf) {
-//             // Process one buffer
-//             demodulate2400(buf);
-//             if (Modes.mode_ac)
-//                 demodulate2400AC(buf);
-
-//             // Return the buffer to the FIFO freelist for reuse
-//             fifo_release(buf);
-//         }
-//     }
-
-//     fifo_halt(); // Reader thread should do this anyway, but just in case..
-//     pthread_join(Modes.reader_thread,NULL);     // Wait on reader thread exit
-
-//     hackRFClose();
-//     fifo_destroy();
-
-//     if (Modes.exit == 1)
-//         return 0;
-//     else
-//         return 1;
-// }
-//
-//=========================================================================
-//
-
-int start_config(void);
-int start_receive(void);
-int stop_receive(void);
 
 int start_config() {
     // Set sane defaults
@@ -268,8 +213,6 @@ int start_receive() {
         if (buf) {
             // Process one buffer
             demodulate2400(buf);
-            if (Modes.mode_ac)
-                demodulate2400AC(buf);
 
             // Return the buffer to the FIFO freelist for reuse
             fifo_release(buf);
@@ -291,3 +234,18 @@ int stop_receive() {
     else
         return 1;
 }
+
+#ifdef DYNAMIC_LINK
+struct _Modes *get_modes(void) __attribute__((optimize("O0")));
+struct aircraft *get_next_aircraft(struct aircraft *current) __attribute__((optimize("O0")));
+
+struct _Modes *get_modes() {
+    return &Modes;
+}
+
+struct aircraft *get_next_aircraft(struct aircraft *current) {
+    if (!current)
+        return Modes.aircrafts;
+    return current->next ? current->next : Modes.aircrafts;
+}
+#endif

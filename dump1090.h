@@ -242,10 +242,7 @@ typedef enum {
 #define MODES_INTERACTIVE_REFRESH_TIME 250      // Milliseconds
 #define MODES_INTERACTIVE_DISPLAY_TTL 60000     // Delete from display after 60 seconds
 
-#define MODES_NET_HEARTBEAT_INTERVAL 60000      // milliseconds
-
 #define MODES_CLIENT_BUF_SIZE  1024
-#define MODES_NET_SNDBUF_SIZE (1024*64)
 #define MODES_NET_SNDBUF_MAX  (7)
 
 #define HISTORY_SIZE 120
@@ -295,13 +292,6 @@ struct _Modes {                             // Internal state
     int           gain;
     int           freq;
 
-    // Networking
-    struct net_service *services;    // Active services
-    struct client *clients;          // Our clients
-
-    struct net_service *beast_verbatim_service;  // Beast-format output service, verbatim mode
-    struct net_service *beast_cooked_service;    // Beast-format output service, "cooked" mode
-
 #ifdef _WIN32
     WSADATA        wsaData;          // Windows socket initialisation
 #endif
@@ -309,52 +299,8 @@ struct _Modes {                             // Internal state
     // Configuration
     sdr_type_t sdr_type;             // where are we getting data from?
     int   nfix_crc;                  // Number of crc bit error(s) to correct
-    int   check_crc;                 // Only display messages with good CRC
     int   fix_df;                    // Try to correct damage to the DF field, as well as the main message body
     int   raw;                       // Raw output format
-    int   mode_ac;                   // Enable decoding of SSR Modes A & C
-    int   mode_ac_auto;              // allow toggling of A/C by Beast commands
-    int   net;                       // Enable networking
-    int   net_only;                  // Enable just networking
-    uint64_t net_heartbeat_interval; // TCP heartbeat interval (milliseconds)
-    int   net_output_flush_size;     // Minimum Size of output data
-    uint64_t net_output_flush_interval; // Maximum interval (in milliseconds) between outputwrites
-    char *net_output_raw_ports;      // List of raw output TCP ports
-    char *net_input_raw_ports;       // List of raw input TCP ports
-    char *net_output_sbs_ports;      // List of SBS output TCP ports
-    char *net_output_stratux_ports;  // List of Stratux output TCP ports
-    char *net_input_beast_ports;     // List of Beast input TCP ports
-    char *net_output_beast_ports;    // List of Beast output TCP ports
-    char *net_bind_address;          // Bind address
-    int   net_sndbuf_size;           // TCP output buffer size (64Kb * 2^n)
-    int   net_verbatim;              // if true, Beast output connections default to verbatim mode
-    int   forward_mlat;              // allow forwarding of mlat messages to output ports
-    int   quiet;                     // Suppress stdout
-    uint32_t show_only;              // Only show messages from this ICAO
-    int   interactive;               // Interactive mode
-    uint64_t interactive_display_ttl;// Interactive mode: TTL display
-    int interactive_display_size;    // Size of TTL display
-    int   interactive_show_distance; // Show aircraft distance and bearing instead of lat/lon
-    interactive_distance_unit_t interactive_distance_units; // Units for interactive distance display
-    char *interactive_callsign_filter; // Filter for interactive display callsigns
-    uint64_t stats;                  // Interval (millis) between stats dumps,
-    int   stats_range_histo;         // Collect/show a range histogram?
-    int   onlyaddr;                  // Print only ICAO addresses
-    int   metric;                    // Use metric units
-    int   use_gnss;                  // Use GNSS altitudes with H suffix ("HAE", though it isn't always) when available
-    int   mlat;                      // Use Beast ascii format for raw data output, i.e. @...; iso *...;
-    char *json_dir;                  // Path to json base directory, or NULL not to write json.
-    uint64_t json_interval;          // Interval between rewriting the json aircraft file, in milliseconds; also the advertised map refresh interval
-    uint64_t json_stats_interval;    // Interval between rewriting the json stats file, in milliseconds
-    int   json_location_accuracy;    // Accuracy of location metadata: 0=none, 1=approx, 2=exact
-    double faup_rate_multiplier;     // Multiplier to adjust rate of faup1090 messages emitted
-
-    int   json_aircraft_history_next;
-    struct {
-        char *content;
-        int clen;
-    } json_aircraft_history[HISTORY_SIZE];
-    
     // State tracking
     struct aircraft *aircrafts;
 };
