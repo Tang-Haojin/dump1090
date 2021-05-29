@@ -446,7 +446,7 @@ score_rank scoreModesMessage(const unsigned char *uncorrected)
     }
 }
 
-#ifndef DYNAMIC_LINK
+// #ifndef DYNAMIC_LINK
 static const char *score_to_string(score_rank score)
 {
     switch (score) {
@@ -487,7 +487,7 @@ static const char *score_to_string(score_rank score)
 
     return "<bad value>";
 }
-#endif
+// #endif
 
 static void decodeExtendedSquitter(struct modesMessage *mm);
 
@@ -1522,7 +1522,7 @@ static void decodeExtendedSquitter(struct modesMessage *mm)
     }
 }
 
-#ifndef DYNAMIC_LINK
+// #ifndef DYNAMIC_LINK
 static const char *df_names[33] = {
     /* 0 */ "Short Air-Air Surveillance",
     /* 1 */ NULL,
@@ -2180,7 +2180,7 @@ void displayModesMessage(struct modesMessage *mm) {
     printf("\n");
     fflush(stdout);
 }
-#endif
+// #endif
 
 //
 //=========================================================================
@@ -2196,9 +2196,9 @@ void useModesMessage(struct modesMessage *mm) {
     // Track aircraft state
     trackUpdateFromMessage(mm);
 
-#ifndef DYNAMIC_LINK
+// #ifndef DYNAMIC_LINK
     displayModesMessage(mm);
-#endif
+// #endif
 }
 
 //

@@ -82,9 +82,9 @@ typedef enum {
 int modesMessageLenByType(int type);
 score_rank scoreModesMessage(const unsigned char *msg);
 int decodeModesMessage (struct modesMessage *mm, const unsigned char *msg);
-#ifndef DYNAMIC_LINK
+// #ifndef DYNAMIC_LINK
 void displayModesMessage(struct modesMessage *mm);
-#endif
+// #endif
 void useModesMessage    (struct modesMessage *mm);
 
 // datafield extraction helpers
